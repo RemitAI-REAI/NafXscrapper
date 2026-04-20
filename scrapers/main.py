@@ -1,62 +1,34 @@
-import asyncio
-import json
-from datetime import datetime
+"""Entry point for the RemitAI scraper.
 
-from wise.wise_spider import WiseSpider
-from xoom.xoom_spider import XoomSpider
-from remitly.remitly_spider import RemitlySpider
-from westernunion.wu_spider import WesternUnionSpider
-from moneygram.moneygram_spider import MoneyGramSpider
-from taptapsend.taptap_spider import TaptapSpider
-from monito.monito_spider import MonitoSpider
+Usage:
+    # Run USD-BDT only (default / P1 corridor):
+    python scrapers/main.py
 
-SPIDERS = [
-    WiseSpider,
-    XoomSpider,
-    RemitlySpider,
-    WesternUnionSpider,
-    MoneyGramSpider,
-    TaptapSpider,
-    MonitoSpider,
-]
+    # Run specific corridors:
+    python scrapers/main.py USD-BDT GBP-BDT
+
+    # Run all configured corridors in priority order:
+    python scrapers/main.py --all
+"""
+import sys
+
+from scrapers.config.corridors import PRIORITY, SEND_AMOUNT
+from scrapers.config.providers import PROVIDERS
+from scrapers.core.orchestrator import run_all
 
 
-async def main():
-    results = []
-    errors = []
+def main():
+    args = sys.argv[1:]
 
-    for SpiderClass in SPIDERS:
-        name = SpiderClass.__name__.replace("Spider", "")
-        print(f"\n[{name}] Scraping...", flush=True)
-        spider = SpiderClass()
-        try:
-            data = spider.scrape()
-            results.append(data)
-            rate = data["exchange_rates"][0]["rate"]
-            print(f"[{name}] OK  Rate: {rate}", flush=True)
-            print(f"[{name}]    Fees: {data['transaction_fees'][:80]}", flush=True)
-            print(f"[{name}]    Time: {data['transfer_times'][:60]}", flush=True)
-        except Exception as e:
-            errors.append({"provider": name, "error": str(e)})
-            print(f"[{name}] FAIL  {e}", flush=True)
-        finally:
-            try:
-                spider.close()
-            except Exception:
-                pass
+    if "--all" in args:
+        corridors = PRIORITY
+    elif args:
+        corridors = [a for a in args if "-" in a]
+    else:
+        corridors = ["USD-BDT"]
 
-    print("\n" + "=" * 60)
-    print(f"Scrape completed at {datetime.now().isoformat()}")
-    print(f"  Successful: {len(results)} / {len(SPIDERS)}")
-    if errors:
-        print(f"  Failed:     {[e['provider'] for e in errors]}")
-    print("=" * 60)
-    print("\n=== FULL RESULTS ===")
-    for r in results:
-        print(json.dumps(r, indent=2))
-
-    return results
+    run_all(corridors=corridors, providers=PROVIDERS, send_amounts=SEND_AMOUNT)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
