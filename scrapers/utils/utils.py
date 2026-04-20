@@ -2,7 +2,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.webdriver import WebDriver
 
 
-def setup_drivver(headless=True):
+def setup_driver(headless=True):
     options = Options()
     if headless:
         options.add_argument("--headless=new")

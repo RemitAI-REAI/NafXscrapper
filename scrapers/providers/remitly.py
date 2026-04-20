@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -11,7 +12,9 @@ from selenium.webdriver.support.wait import WebDriverWait
 from scrapers.core.base_spider import BaseScraper
 from scrapers.models.base_page import BasePage
 from scrapers.models.data_model import ProviderResult
-from scrapers.utils.utils import setup_drivver
+from scrapers.utils.utils import setup_driver
+
+logger = logging.getLogger(__name__)
 
 _CORRIDOR_URLS: dict[str, str] = {
     "USD-BDT": "https://www.remitly.com/us/en/bangladesh",
@@ -32,7 +35,7 @@ def _to_decimal(text: str) -> Decimal:
 
 class RemitlySpider(BaseScraper):
     def __init__(self):
-        self.driver = setup_drivver(headless=True)
+        self.driver = setup_driver(headless=True)
         self.driver.implicitly_wait(5)
         self.page = BasePage(self.driver)
 
@@ -49,12 +52,14 @@ class RemitlySpider(BaseScraper):
                 field = WebDriverWait(self.driver, 5).until(
                     EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
                 )
-                ActionChains(self.driver).click(field).key_down(Keys.CONTROL).send_keys("a").key_up(Keys.CONTROL).send_keys(str(int(amount))).perform()
+                self.driver.execute_script("arguments[0].value = '';", field)
+                field.send_keys(str(int(amount)))
                 field.send_keys(Keys.TAB)
                 time.sleep(3)
                 return
             except Exception:
                 continue
+        logger.warning("RemitlySpider: could not find send-amount input field")
 
     def _extract_rate(self) -> Decimal:
         for selector in [
@@ -71,24 +76,25 @@ class RemitlySpider(BaseScraper):
         match = re.search(r"1\s*\w+\s*=\s*([\d.,]+)\s*BDT", src)
         return _to_decimal(match.group(1)) if match else Decimal("0")
 
-    def _extract_fees(self) -> dict[str, Decimal]:
+    def _extract_fees(self, send_currency: str) -> dict[str, Decimal]:
         body = self.driver.find_element(By.TAG_NAME, "body").text
         fees: dict[str, Decimal] = {}
+        cur = re.escape(send_currency)
 
         if re.search(r"\bno\s+fee\b|\bfree\s+transfer\b|\bno\s+transfer\s+fee\b", body, re.IGNORECASE):
             fees["bank"] = Decimal("0")
         else:
             # Try to find fee per method — Remitly often lists "Economy" (bank) and "Express" (debit/card)
             for method, pattern in [
-                ("bank", r"Economy.*?([\d.,]+)\s*USD"),
-                ("debit_card", r"Express.*?([\d.,]+)\s*USD"),
+                ("bank", rf"Economy.*?([\d.,]+)\s*{cur}"),
+                ("debit_card", rf"Express.*?([\d.,]+)\s*{cur}"),
             ]:
                 m = re.search(pattern, body, re.IGNORECASE | re.DOTALL)
                 if m:
                     fees[method] = _to_decimal(m.group(1))
 
             if not fees:
-                m = re.search(r"([\d.,]+)\s*USD\s*(?:fee|transfer fee)", body, re.IGNORECASE)
+                m = re.search(rf"([\d.,]+)\s*{cur}\s*(?:fee|transfer fee)", body, re.IGNORECASE)
                 fees["bank"] = _to_decimal(m.group(1)) if m else Decimal("0")
 
         return fees
@@ -126,7 +132,7 @@ class RemitlySpider(BaseScraper):
         self._set_amount(send_amount)
 
         rate = self._extract_rate()
-        fees = self._extract_fees()
+        fees = self._extract_fees(send_currency)
         transfer_time = self._extract_transfer_time()
         bank_fee = fees.get("bank", Decimal("0"))
         receive = (send_amount - bank_fee) * rate if rate else None

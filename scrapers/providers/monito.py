@@ -11,7 +11,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 from scrapers.core.base_spider import BaseScraper
 from scrapers.models.base_page import BasePage
 from scrapers.models.data_model import ProviderResult
-from scrapers.utils.utils import setup_drivver
+from scrapers.utils.utils import setup_driver
 
 # Monito is a comparison aggregator — URL encodes corridor and send amount
 _CORRIDOR_URL_TEMPLATES: dict[str, str] = {
@@ -33,7 +33,7 @@ def _to_decimal(text: str) -> Decimal:
 
 class MonitoSpider(BaseScraper):
     def __init__(self):
-        self.driver = setup_drivver(headless=True)
+        self.driver = setup_driver(headless=True)
         self.driver.implicitly_wait(5)
         self.page = BasePage(self.driver)
 
@@ -71,7 +71,7 @@ class MonitoSpider(BaseScraper):
 
         url = template.format(amount=int(send_amount))
         self.driver.get(url)
-        time.sleep(15)
+        time.sleep(3)
         self._wait_for_results()
 
         results = self._extract_results(recv_currency)
@@ -79,9 +79,11 @@ class MonitoSpider(BaseScraper):
         # Best rate = first BDT amount found (Monito sorts by best rate)
         rate = Decimal("0")
         for r in results:
-            m = re.search(rf"([\d.,]+)\s*{recv_currency}", r)
+            m = re.search(rf"([\d.,]+)\s*{re.escape(recv_currency)}", r)
             if m:
                 candidate = _to_decimal(m.group(1))
+                if candidate <= Decimal("0"):
+                    continue
                 # Monito may show total receive amount rather than rate — normalise
                 if candidate > send_amount:
                     rate = (candidate / send_amount).quantize(Decimal("0.00000001"))

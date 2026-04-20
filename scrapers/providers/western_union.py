@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -11,7 +12,9 @@ from selenium.webdriver.support.wait import WebDriverWait
 from scrapers.core.base_spider import BaseScraper
 from scrapers.models.base_page import BasePage
 from scrapers.models.data_model import ProviderResult
-from scrapers.utils.utils import setup_drivver
+from scrapers.utils.utils import setup_driver
+
+logger = logging.getLogger(__name__)
 
 _URL = "https://www.westernunion.com/us/en/web/send-money/start"
 
@@ -35,7 +38,7 @@ def _to_decimal(text: str) -> Decimal:
 
 class WesternUnionSpider(BaseScraper):
     def __init__(self):
-        self.driver = setup_drivver(headless=True)
+        self.driver = setup_driver(headless=True)
         self.driver.implicitly_wait(5)
         self.page = BasePage(self.driver)
 
@@ -63,7 +66,7 @@ class WesternUnionSpider(BaseScraper):
             field.send_keys(str(int(amount)))
             time.sleep(2)
         except Exception:
-            pass
+            logger.warning("WesternUnionSpider: could not find send-amount input field")
 
     def _click_payout_method(self, label: str) -> bool:
         for xpath in [
@@ -80,9 +83,10 @@ class WesternUnionSpider(BaseScraper):
                 continue
         return False
 
-    def _extract_rate(self) -> Decimal:
+    def _extract_rate(self, send_currency: str) -> Decimal:
         body = self.driver.find_element(By.TAG_NAME, "body").text
-        for pat in [r"1\.?\d*\s*USD\s*=\s*([\d.,]+)", r"([\d]{2,4}\.[\d]{2,4})\s*BDT"]:
+        cur = re.escape(send_currency)
+        for pat in [rf"1\.?\d*\s*{cur}\s*=\s*([\d.,]+)", r"([\d]{2,4}\.[\d]{2,4})\s*BDT"]:
             m = re.search(pat, body)
             if m:
                 return _to_decimal(m.group(1))
@@ -140,7 +144,12 @@ class WesternUnionSpider(BaseScraper):
             raise ValueError(msg)
 
         self.driver.get(_URL)
-        time.sleep(18)
+        try:
+            WebDriverWait(self.driver, 25).until(
+                EC.presence_of_element_located((By.ID, "country"))
+            )
+        except Exception:
+            pass
 
         if not self._select_country(country, recv_currency):
             msg = f"Could not select country {country} on Western Union"
@@ -149,7 +158,7 @@ class WesternUnionSpider(BaseScraper):
         self._enter_amount(send_amount)
         self._click_payout_method("Bank account")
 
-        rate = self._extract_rate()
+        rate = self._extract_rate(send_currency)
         fees = self._extract_all_fees()
         transfer_time = self._extract_transfer_time()
         bank_fee = fees.get("bank", Decimal("0"))

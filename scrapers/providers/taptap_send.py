@@ -1,14 +1,15 @@
 import re
-import time
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 
 from scrapers.core.base_spider import BaseScraper
 from scrapers.models.base_page import BasePage
 from scrapers.models.data_model import ProviderResult
-from scrapers.utils.utils import setup_drivver
+from scrapers.utils.utils import setup_driver
 
 _CORRIDOR_URLS: dict[str, str] = {
     "USD-BDT": "https://www.taptapsend.com/send-to/bangladesh",
@@ -29,7 +30,7 @@ def _to_decimal(text: str) -> Decimal:
 
 class TaptapSendSpider(BaseScraper):
     def __init__(self):
-        self.driver = setup_drivver(headless=True)
+        self.driver = setup_driver(headless=True)
         self.driver.implicitly_wait(5)
         self.page = BasePage(self.driver)
 
@@ -69,7 +70,12 @@ class TaptapSendSpider(BaseScraper):
             raise ValueError(msg)
 
         self.driver.get(url)
-        time.sleep(8)
+        try:
+            WebDriverWait(self.driver, 15).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "[class*='rate'], [class*='exchange'], [class*='amount']"))
+            )
+        except Exception:
+            pass
 
         rate = self._extract_rate()
         fees = self._extract_fees()
@@ -84,7 +90,7 @@ class TaptapSendSpider(BaseScraper):
             exchange_rate=rate,
             fees=fees,
             transfer_time=transfer_time,
-            receive_amount=receive.quantize(Decimal("0.00000001")) if receive else None,
+            receive_amount=receive.quantize(Decimal("0.01")) if receive else None,
             scraped_at=datetime.now(timezone.utc).isoformat(),
         )
 

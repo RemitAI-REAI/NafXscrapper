@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 from datetime import datetime, timezone
@@ -11,7 +12,9 @@ from selenium.webdriver.support.wait import WebDriverWait
 from scrapers.core.base_spider import BaseScraper
 from scrapers.models.base_page import BasePage
 from scrapers.models.data_model import ProviderResult
-from scrapers.utils.utils import setup_drivver
+from scrapers.utils.utils import setup_driver
+
+logger = logging.getLogger(__name__)
 
 _CORRIDOR_URLS: dict[str, str] = {
     "USD-BDT": "https://www.xoom.com/bangladesh/send-money",
@@ -31,7 +34,7 @@ def _to_decimal(text: str) -> Decimal:
 
 class XoomSpider(BaseScraper):
     def __init__(self):
-        self.driver = setup_drivver(headless=True)
+        self.driver = setup_driver(headless=True)
         self.driver.implicitly_wait(5)
         self.page = BasePage(self.driver)
 
@@ -53,6 +56,7 @@ class XoomSpider(BaseScraper):
                 return
             except Exception:
                 continue
+        logger.warning("XoomSpider: could not find send-amount input field")
 
     def _extract_rate(self) -> Decimal:
         el = WebDriverWait(self.driver, 15).until(

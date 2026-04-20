@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from scrapers.models.data_model import ProviderResult, ScrapeRun
 from scrapers.core.output import save_run
+from scrapers.models.data_model import ProviderResult, ScrapeRun
+
+logger = logging.getLogger(__name__)
+
+_CORRIDOR_RE = re.compile(r"^[A-Za-z]{3}-[A-Za-z]{3}$")
 
 
 def _run_one(provider_cfg: dict, send_currency: str, recv_currency: str, send_amount: Decimal) -> ProviderResult:
@@ -19,6 +25,10 @@ def _run_one(provider_cfg: dict, send_currency: str, recv_currency: str, send_am
 
 def run_corridor(corridor: str, providers: list[dict], send_amount: Decimal, max_workers: int = 5) -> ScrapeRun:
     """Run all enabled providers for one corridor with bounded parallelism."""
+    if not _CORRIDOR_RE.match(corridor):
+        msg = f"Invalid corridor format: {corridor!r}. Expected 'XXX-YYY'."
+        raise ValueError(msg)
+
     send_currency, recv_currency = corridor.split("-")
     enabled = [p for p in providers if p["enabled"] and corridor in p["corridors"]]
 
@@ -38,10 +48,10 @@ def run_corridor(corridor: str, providers: list[dict], send_amount: Decimal, max
             try:
                 result = future.result()
                 run.results.append(result)
-                print(f"  [{name}] OK  rate={result.exchange_rate}  fees={result.fees}")
+                logger.info("[%s] OK  rate=%s  fees=%s", name, result.exchange_rate, result.fees)
             except Exception as exc:
                 run.errors.append({"provider": name, "error": str(exc)})
-                print(f"  [{name}] FAIL  {exc}")
+                logger.error("[%s] FAIL  %s", name, exc)
 
     run.completed_at = datetime.now(timezone.utc).isoformat()
     return run
@@ -51,13 +61,17 @@ def run_all(corridors: list[str], providers: list[dict], send_amounts: dict[str,
     """Run corridors sequentially in priority order; save each run to disk."""
     runs = []
     for corridor in corridors:
-        print(f"\n{'='*60}\nCorridor: {corridor}\n{'='*60}")
+        logger.info("=" * 60)
+        logger.info("Corridor: %s", corridor)
+        logger.info("=" * 60)
         amount = send_amounts.get(corridor, Decimal("1000"))
         run = run_corridor(corridor, providers, amount, max_workers)
         save_run(run)
         runs.append(run)
         ok = len(run.results)
         fail = len(run.errors)
-        print(f"  Done — {ok} OK, {fail} failed, elapsed: "
-              f"{run.started_at} → {run.completed_at}")
+        started = datetime.fromisoformat(run.started_at)
+        completed = datetime.fromisoformat(run.completed_at)
+        elapsed = (completed - started).total_seconds()
+        logger.info("Done — %d OK, %d failed, elapsed: %.1fs", ok, fail, elapsed)
     return runs

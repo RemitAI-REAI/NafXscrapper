@@ -12,7 +12,7 @@ from selenium.webdriver.support.wait import WebDriverWait
 from scrapers.core.base_spider import BaseScraper
 from scrapers.models.base_page import BasePage
 from scrapers.models.data_model import ProviderResult
-from scrapers.utils.utils import setup_drivver
+from scrapers.utils.utils import setup_driver
 
 _CORRIDOR_URLS: dict[str, str] = {
     "USD-BDT": "https://wise.com/us/pricing/send-money?source=USD&target=BDT&payInMethod=BANK_TRANSFER&sourceAmount=1000",
@@ -35,7 +35,7 @@ def _to_decimal(text: str) -> Decimal:
 
 class WiseSpider(BaseScraper):
     def __init__(self):
-        self.driver = setup_drivver(headless=True)
+        self.driver = setup_driver(headless=True)
         self.driver.implicitly_wait(5)
         self.page = BasePage(self.driver)
 
@@ -65,18 +65,19 @@ class WiseSpider(BaseScraper):
         )
         return _to_decimal(el.text.strip())
 
-    def _extract_fees(self) -> dict[str, Decimal]:
+    def _extract_fees(self, send_currency: str) -> dict[str, Decimal]:
         container = WebDriverWait(self.driver, 20).until(
             EC.visibility_of_element_located((By.CSS_SELECTOR, ".Fees_container"))
         )
         text = container.text.strip()
         lines = [l.strip() for l in text.split("\n") if l.strip()]
+        cur = re.escape(send_currency)
 
         fees: dict[str, Decimal] = {}
         i = 0
         while i < len(lines) - 1:
             label, nxt = lines[i], lines[i + 1]
-            if not re.match(r"^[\d.,]+", label) and re.match(r"^[\d.,]+\s*USD", nxt):
+            if not re.match(r"^[\d.,]+", label) and re.match(rf"^[\d.,]+\s*{cur}", nxt):
                 key = re.sub(r"\s+", "_", label.lower().strip(":"))
                 fees[key] = _to_decimal(nxt)
                 i += 2
@@ -84,21 +85,25 @@ class WiseSpider(BaseScraper):
                 i += 1
 
         if not fees:
-            # Fallback: grab all USD amounts and label generically
-            for idx, amt in enumerate(re.findall(r"[\d.,]+\s*USD", text)):
+            # Fallback: grab all currency amounts and label generically
+            for idx, amt in enumerate(re.findall(rf"[\d.,]+\s*{cur}", text)):
                 fees[f"method_{idx}"] = _to_decimal(amt)
 
         return fees or {"bank": Decimal("0")}
 
     def _extract_transfer_time(self) -> dict[str, str]:
-        WebDriverWait(self.driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, ".np-section.m-t-2 p.m-b-0 strong"))
-        )
-        el = self.driver.find_element(
-            By.CSS_SELECTOR, ".tapestry-card-content .np-section.m-t-2 span[role='status']"
-        )
-        soup = BeautifulSoup(el.get_attribute("outerHTML"), "html.parser")
-        time_str = soup.select_one("p.m-b-0 strong").text.strip().replace("by ", "")
+        try:
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".np-section.m-t-2 p.m-b-0 strong"))
+            )
+            el = self.driver.find_element(
+                By.CSS_SELECTOR, ".tapestry-card-content .np-section.m-t-2 span[role='status']"
+            )
+            soup = BeautifulSoup(el.get_attribute("outerHTML"), "html.parser")
+            strong = soup.select_one("p.m-b-0 strong")
+            time_str = strong.text.strip().replace("by ", "") if strong else "Unknown"
+        except Exception:
+            time_str = "Unknown"
         return {"bank": time_str}
 
     def scrape(self, send_currency: str, recv_currency: str, send_amount: Decimal) -> ProviderResult:
@@ -115,9 +120,10 @@ class WiseSpider(BaseScraper):
         time.sleep(5)
 
         rate = self._extract_rate()
-        fees = self._extract_fees()
+        fees = self._extract_fees(send_currency)
         transfer_time = self._extract_transfer_time()
-        receive = (send_amount - min(fees.values())) * rate if fees else send_amount * rate
+        bank_fee = fees.get("bank", Decimal("0"))
+        receive = (send_amount - bank_fee) * rate
 
         return ProviderResult(
             provider="Wise",
