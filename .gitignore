@@ -10,7 +10,7 @@ build/
 *.venv/
 venv/
 env/
-
+.playwright-mcp/
 # Jupyter Notebook
 .ipynb_checkpoints/
 
@@ -22,3 +22,4 @@ env/
 # System files
 .DS_Store
 Thumbs.db
+output/
